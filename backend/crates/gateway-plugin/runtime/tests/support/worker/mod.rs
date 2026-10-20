@@ -284,6 +284,27 @@ impl Peer {
         let Some(fixture) = self.configuration.get(fixture_field) else {
             return Ok(());
         };
+        for fixture in fixture
+            .as_array()
+            .map_or(std::slice::from_ref(fixture), Vec::as_slice)
+        {
+            if let Some(gate) = fixture["wait_for_file"].as_str() {
+                while !std::path::Path::new(gate).exists() {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            }
+            self.execute_nested_model_fixture(parent, fixture, marker_field)
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn execute_nested_model_fixture(
+        &self,
+        parent: u64,
+        fixture: &Value,
+        marker_field: &str,
+    ) -> Result<(), PluginFault> {
         let body = if let Some(path) = fixture["body_file"].as_str() {
             std::fs::read(path).unwrap()
         } else {
@@ -456,6 +477,37 @@ impl Peer {
             }
             self.send(Message::End { id, error: None }, vec![]).await;
             return;
+        }
+        if self.configuration["http_probe_methods"]
+            .as_array()
+            .is_some_and(|methods| {
+                methods
+                    .iter()
+                    .any(|probe| probe.as_str() == Some(method.as_str()))
+            })
+        {
+            let body = vec![
+                b'x';
+                self.configuration["http_probe_body_bytes"]
+                    .as_u64()
+                    .unwrap() as usize
+            ];
+            let response = self
+                .callback_payload(
+                    id,
+                    "host.http.do",
+                    json!({"method":"POST", "url":self.configuration["http_probe_url"]}),
+                    body,
+                )
+                .await;
+            let status = match response {
+                Ok((result, _)) => result["status"].as_u64().unwrap(),
+                Err(error) => u64::from(error.http_status.unwrap()),
+            };
+            self.append_observation_marker(
+                "http_probe_marker",
+                &json!({"method":method,"status":status}),
+            );
         }
         match method.as_str() {
             "upstream_adapter.register" => {

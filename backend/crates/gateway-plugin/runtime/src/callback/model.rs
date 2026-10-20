@@ -142,12 +142,7 @@ impl PluginModels {
                 let stream = method == "host.model.execute_stream";
                 let started = if let Some(client_key_id) = request.client_key_id.take() {
                     let bound = self.binding(&port, context, call, client_key_id).await?;
-                    let maximum = bound
-                        .request_settings()
-                        .map(|settings| settings.snapshot().responses_max_decompressed_body_bytes())
-                        .map(Ok)
-                        .unwrap_or_else(|| self.request_limits.body_bytes(call))?;
-                    check_size(maximum)?;
+                    check_size(bound.request_body_limit())?;
                     port.start_bound(self.bound_request(request, payload, stream, bound)?)
                         .await
                         .map_err(super::error::gateway)?

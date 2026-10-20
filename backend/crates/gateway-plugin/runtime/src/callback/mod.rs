@@ -191,6 +191,7 @@ impl PluginCallbacks {
         extensions: gateway_core::engine::extensions::ExtensionCallScope,
         plan: Option<gateway_core::engine::middleware::FrozenMiddlewarePlan>,
         cancellation: CancellationToken,
+        request_body_limit: Option<usize>,
     ) -> Result<Arc<CallbackScope>, PluginFault> {
         if !matches!(
             context.stage,
@@ -207,6 +208,7 @@ impl PluginCallbacks {
             scope = scope.with_execution_effects(effects);
         }
         scope.extension_scope = extensions;
+        scope.request_body_limit = request_body_limit;
         scope.origin = plan.map(|plan| InvocationContext {
             request_id: context
                 .request_id

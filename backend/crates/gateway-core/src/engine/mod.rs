@@ -760,7 +760,8 @@ impl AttemptContext {
                 extension_scope: self.request.extension_scope.clone(),
                 execution_effects: self.request.execution_effects.as_ref().map(Arc::clone),
             },
-        );
+        )
+        .with_request_body_limit(self.request.request_body_limit);
         provider::execute_attempt_middleware(
             self.request.middleware.as_ref(),
             context,
