@@ -284,15 +284,30 @@ impl Peer {
         let Some(fixture) = self.configuration.get(fixture_field) else {
             return Ok(());
         };
+        let body = if let Some(path) = fixture["body_file"].as_str() {
+            std::fs::read(path).unwrap()
+        } else {
+            serde_json::to_vec(&fixture["body"]).unwrap()
+        };
         if fixture["stream"] == true {
-            let (result, payload) = self
+            let response = self
                 .callback_payload(
                     parent,
                     "host.model.execute_stream",
                     fixture["request"].clone(),
-                    serde_json::to_vec(&fixture["body"]).unwrap(),
+                    body,
                 )
-                .await?;
+                .await;
+            let (result, payload) = match response {
+                Err(error) if fixture["expect_error"] == true => {
+                    self.append_observation_marker(
+                        marker_field,
+                        &json!({"error":error.code,"http_status":error.http_status}),
+                    );
+                    return Ok(());
+                }
+                result => result?,
+            };
             assert!(payload.is_empty());
             let stream: gateway_plugin_sdk::call::host::ModelStreamResult =
                 serde_json::from_value(result).unwrap();
@@ -348,7 +363,7 @@ impl Peer {
                 parent,
                 "host.model.execute",
                 fixture["request"].clone(),
-                serde_json::to_vec(&fixture["body"]).unwrap(),
+                body,
             )
             .await;
         match callback {
@@ -366,7 +381,10 @@ impl Peer {
                 Ok(())
             }
             Err(error) if fixture["expect_error"] == true => {
-                self.append_observation_marker(marker_field, &json!({"error":error.code}));
+                self.append_observation_marker(
+                    marker_field,
+                    &json!({"error":error.code,"http_status":error.http_status}),
+                );
                 Ok(())
             }
             Err(error) => {
@@ -1304,6 +1322,20 @@ impl Peer {
                 return;
             }
             "plugin.register" => {
+                if let Some(request) = self.configuration.get("registration_http") {
+                    let result = self
+                        .callback_payload(
+                            id,
+                            "host.http.do",
+                            request["params"].clone(),
+                            request["body"].as_str().unwrap().as_bytes().to_vec(),
+                        )
+                        .await;
+                    if let Err(error) = result {
+                        self.send(Message::Error { id, error }, vec![]).await;
+                        return;
+                    }
+                }
                 if self.configuration["exit_during_registration"] == true {
                     std::process::exit(31);
                 }
@@ -1598,13 +1630,19 @@ impl Peer {
                 )
             }))
             .await?;
-            for (result, payload) in results {
+            for (callback, (result, payload)) in callbacks.iter().zip(results) {
                 if let Some(stream) = result["stream"].as_str() {
+                    response_body.clear();
+                    let read_method = if callback["method"] == "host.http.do_stream" {
+                        "host.http.stream_read"
+                    } else {
+                        "host.upstream.http.stream_read"
+                    };
                     loop {
                         let (result, chunk) = self
                             .callback_payload(
                                 id,
-                                "host.upstream.http.stream_read",
+                                read_method,
                                 json!({"stream":stream,"maximum_bytes":65536}),
                                 vec![],
                             )
